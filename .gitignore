@@ -9,3 +9,5 @@ __pycache__
 .env
 .btp-venv/
 btp-venv/
+.DS_Store
+mc_dropout/models/
