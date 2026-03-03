@@ -1,3 +1,4 @@
+# %%
 """
 Variational BNN: Variational LSTM for Trajectory Prediction
 ============================================================
@@ -6,35 +7,28 @@ Loss:         ELBO  =  reconstruction (MSE) + KL divergence
 Evaluation:   ADE, FDE, NLL, ECE   (matches MC-Dropout evaluation protocol)
 
 Usage (from repo root):
-    python variational_bnn.py
+    python variational_bnn/variational_bnn.py
 """
+# %%
+import sys
 import os
+
+# Add repo root to path
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, REPO_ROOT)
+os.chdir(REPO_ROOT)
+
 import math
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Normal
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 from src.data_loader import ScenesDataLoader
-# Verify data exists
-data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
-required_file = os.path.join(data_path, 'eth', 'train', 'biwi_hotel_train.txt')
 
-if not os.path.exists(required_file):
-    print("ERROR: Dataset not found. Please run the following commands from the repo root:")
-    print()
-    print("  git clone https://github.com/StanfordASL/Trajectron-plus-plus.git /tmp/trajectron")
-    print("  cp -r /tmp/trajectron/experiments/pedestrians/raw/* data/raw/")
-    print()
-    sys.exit(1)
+os.makedirs(os.path.join(REPO_ROOT, "variational_bnn/models"), exist_ok=True)
 
-
-os.makedirs("variational_bnn/models", exist_ok=True)
-
-
+# %%
 # ---------------------------------------------------------------------------
 # 1.  BAYESIAN LINEAR LAYER  (weight-space variational inference)
 # ---------------------------------------------------------------------------
@@ -116,7 +110,7 @@ class BayesianLinear(nn.Module):
 
         return F.linear(x, w, b)
 
-
+# %%
 # ---------------------------------------------------------------------------
 # 2.  VARIATIONAL LSTM CELL
 # ---------------------------------------------------------------------------
@@ -156,7 +150,7 @@ class VariationalLSTMCell(nn.Module):
         h_new = o * torch.tanh(c_new)
         return h_new, (h_new, c_new)
 
-
+# %%
 # ---------------------------------------------------------------------------
 # 3.  FULL VARIATIONAL LSTM MODEL
 # ---------------------------------------------------------------------------
@@ -248,7 +242,7 @@ class VariationalLSTM(nn.Module):
 
         return mu, log_sigma, kl
 
-
+# %%
 # ---------------------------------------------------------------------------
 # 4.  ELBO LOSS
 # ---------------------------------------------------------------------------
@@ -289,7 +283,7 @@ def elbo_loss(
 
     return loss, nll, kl_scaled
 
-
+# %%
 # ---------------------------------------------------------------------------
 # 5.  PROBABILISTIC INFERENCE  (sample weights N times)
 # ---------------------------------------------------------------------------
@@ -329,7 +323,7 @@ def variational_predict(
 
     return mean_mu, mean_sigma, variance, all_mu
 
-
+# %%
 # ---------------------------------------------------------------------------
 # 6.  EVALUATION METRICS: ADE, FDE, NLL, ECE
 # ---------------------------------------------------------------------------
@@ -457,7 +451,7 @@ def evaluate(
         'ECE': ece,
     }
 
-
+# %%
 # ---------------------------------------------------------------------------
 # 7.  TRAINING
 # ---------------------------------------------------------------------------
@@ -498,7 +492,7 @@ def train_epoch(
         'kl':   total_kl   / n,
     }
 
-
+# %%
 # ---------------------------------------------------------------------------
 # 8.  MAIN
 # ---------------------------------------------------------------------------
@@ -508,7 +502,8 @@ if __name__ == '__main__':
     print(f"Using device: {device}")
 
     # Data
-    loader_factory = ScenesDataLoader(data_root='data/raw/')
+    repo_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
+    loader_factory = ScenesDataLoader(data_root=os.path.join(repo_root, 'data/raw/'))
     train_loader = loader_factory.get_train_loader(
         scenes=['eth', 'hotel', 'univ', 'zara1', 'students1'],
         batch_size=32,
@@ -520,66 +515,102 @@ if __name__ == '__main__':
     n_batches = len(train_loader)
     print(f"Training samples : {len(train_loader.dataset)}")
     print(f"Val samples      : {len(val_loader.dataset)}")
-    print(f"Batches per epoch: {n_batches}")
+    print(f"Batches per epoch: {n_batches}\n")
 
-    # Model
-    model = VariationalLSTM(
-        input_dim=2,
-        hidden_dim=64,
-        pred_len=12,
-        num_enc_layers=2,
-        enc_dropout=0.1,
-        prior_std=0.1,
-    ).to(device)
+    # -------------------------------------------------------
+    # Hyperparameter grid — add/remove values as needed
+    # -------------------------------------------------------
+    hyperparam_grid = [ #can add more hyperparameter combinations here
+        {'num_epochs': 50,  'warmup': 10, 'beta_max': 1.0,  'hidden_dim': 64,  'lr': 1e-3},
+        {'num_epochs': 50,  'warmup': 20, 'beta_max': 0.5,  'hidden_dim': 64,  'lr': 1e-3},
+        {'num_epochs': 50, 'warmup': 20, 'beta_max': 1.0,  'hidden_dim': 128, 'lr': 1e-3},
+        {'num_epochs': 50,  'warmup': 30, 'beta_max': 0.1,  'hidden_dim': 64,  'lr': 5e-4},
+    ]
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.5)
+    all_results = []
 
-    # KL annealing: ramp beta from 0 → 1 over first 20 epochs
-    # This prevents the model from collapsing to the prior too early.
-    def get_beta(epoch: int, warmup: int = 20) -> float:
-        return min(1.0, epoch / warmup)
+    for run_idx, hp in enumerate(hyperparam_grid):
+        print(f"\n{'='*60}")
+        print(f"RUN {run_idx + 1}/{len(hyperparam_grid)}")
+        print(f"  num_epochs={hp['num_epochs']}  warmup={hp['warmup']}  "
+              f"beta_max={hp['beta_max']}  hidden_dim={hp['hidden_dim']}  lr={hp['lr']}")
+        print(f"{'='*60}\n")
 
-    best_fde = float('inf')
-    NUM_EPOCHS = 50
+        # Fresh model for each run
+        model = VariationalLSTM(
+            input_dim=2,
+            hidden_dim=hp['hidden_dim'],
+            pred_len=12,
+            num_enc_layers=2,
+            enc_dropout=0.1,
+            prior_std=0.1,
+        ).to(device)
 
-    print("\nStarting training...\n")
-    for epoch in range(1, NUM_EPOCHS + 1):
-        beta = get_beta(epoch)
-        train_metrics = train_epoch(
-            model, train_loader, optimizer, device, n_batches, beta=beta
-        )
-        scheduler.step()
+        optimizer = torch.optim.Adam(model.parameters(), lr=hp['lr'])
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.5)
 
-        if epoch % 5 == 0:
-            val_metrics = evaluate(model, val_loader, device, n_samples=50)
-            print(
-                f"Epoch {epoch:3d} | "
-                f"Loss: {train_metrics['loss']:.4f}  "
-                f"NLL: {train_metrics['nll']:.4f}  "
-                f"KL: {train_metrics['kl']:.4f}  "
-                f"beta: {beta:.2f} | "
-                f"Val ADE: {val_metrics['ADE']:.4f}  "
-                f"FDE: {val_metrics['FDE']:.4f}  "
-                f"NLL: {val_metrics['NLL']:.4f}  "
-                f"ECE: {val_metrics['ECE']:.4f}"
+        def get_beta(epoch: int) -> float:
+            return min(hp['beta_max'], epoch / hp['warmup'])
+
+        best_fde = float('inf')
+
+        for epoch in range(1, hp['num_epochs'] + 1):
+            beta = get_beta(epoch)
+            train_metrics = train_epoch(
+                model, train_loader, optimizer, device, n_batches, beta=beta
             )
+            scheduler.step()
 
-            if val_metrics['FDE'] < best_fde:
-                best_fde = val_metrics['FDE']
-                torch.save(
-                    model.state_dict(),
-                    'variational_bnn/models/variational_bnn_best.pt',
+            if epoch % 5 == 0:
+                val_metrics = evaluate(model, val_loader, device, n_samples=50)
+                print(
+                    f"  Epoch {epoch:3d} | "
+                    f"Loss: {train_metrics['loss']:.4f}  "
+                    f"NLL: {train_metrics['nll']:.4f}  "
+                    f"KL: {train_metrics['kl']:.4f}  "
+                    f"beta: {beta:.2f} | "
+                    f"Val ADE: {val_metrics['ADE']:.4f}  "
+                    f"FDE: {val_metrics['FDE']:.4f}  "
+                    f"NLL: {val_metrics['NLL']:.4f}  "
+                    f"ECE: {val_metrics['ECE']:.4f}"
                 )
-                print(f"  → Saved best model (FDE={best_fde:.4f})")
-    print("FINAL EVALUATION ON VALIDATION SET")
-    print("="*60)
-    final_metrics = evaluate(model, val_loader, device, n_samples=50)
-    print(f"ADE  : {final_metrics['ADE']:.4f} meters")
-    print(f"FDE  : {final_metrics['FDE']:.4f} meters")
-    print(f"NLL  : {final_metrics['NLL']:.4f}")
-    print(f"ECE  : {final_metrics['ECE']:.4f}")
-    print("="*60)
-    print("\nTraining complete.")
-    print("\n" + "="*60)
 
+                if val_metrics['FDE'] < best_fde:
+                    best_fde = val_metrics['FDE']
+                    torch.save(
+                        model.state_dict(),
+                        f'variational_bnn/models/run{run_idx + 1}_best.pt',
+                    )
+                    print(f"    → Saved best model (FDE={best_fde:.4f})")
+
+        # Final evaluation for this run
+        print(f"\n  FINAL EVALUATION — RUN {run_idx + 1}")
+        print(f"  {'-'*40}")
+        final_metrics = evaluate(model, val_loader, device, n_samples=50)
+        print(f"  ADE : {final_metrics['ADE']:.4f} meters")
+        print(f"  FDE : {final_metrics['FDE']:.4f} meters")
+        print(f"  NLL : {final_metrics['NLL']:.4f}")
+        print(f"  ECE : {final_metrics['ECE']:.4f}")
+
+        all_results.append({**hp, **final_metrics})
+
+    # -------------------------------------------------------
+    # Summary table across all runs
+    # -------------------------------------------------------
+    print(f"\n\n{'='*60}")
+    print("HYPERPARAMETER SEARCH SUMMARY")
+    print(f"{'='*60}")
+    print(f"{'Run':<5} {'Epochs':<8} {'Warmup':<8} {'Beta':<6} {'HidDim':<8} {'LR':<8} {'ADE':<8} {'FDE':<8} {'NLL':<8} {'ECE':<8}")
+    print(f"{'-'*75}")
+    for i, r in enumerate(all_results):
+        print(
+            f"{i+1:<5} {r['num_epochs']:<8} {r['warmup']:<8} {r['beta_max']:<6} "
+            f"{r['hidden_dim']:<8} {r['lr']:<8} {r['ADE']:<8.4f} {r['FDE']:<8.4f} "
+            f"{r['NLL']:<8.4f} {r['ECE']:<8.4f}"
+        )
+
+    best_run = min(all_results, key=lambda x: x['FDE'])
+    print(f"\nBest run by FDE: Run {all_results.index(best_run) + 1} → FDE={best_run['FDE']:.4f}")
+    print(f"  Hyperparameters: {best_run}")
+    print(f"{'='*60}")
+    print("\nTraining complete.")
