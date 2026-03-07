@@ -331,24 +331,24 @@ def train_epoch(
     svi:    SVI,
     loader,
     device: torch.device,
-) -> float:
-    """
-    One epoch of SVI training.
-    Pyro's SVI.step() handles: forward pass, ELBO, KL, backward, optimizer step.
-
-    Returns:
-        avg_loss : float  average ELBO loss over the epoch
-    """
+) -> dict:
+    total_elbo = 0.0
     total_loss = 0.0
 
     for obs, gt in loader:
         obs = obs.to(device)
         gt  = gt.to(device)
-        # svi.step() = forward + ELBO + KL + backward + optimizer step
-        loss = svi.step(obs, gt)
-        total_loss += loss
+        B   = obs.size(0)
 
-    return total_loss / len(loader)
+        elbo = svi.step(obs, gt)
+        total_elbo += elbo
+        total_loss += elbo / (B * 12 * 2)   # normalise to match original scale
+
+    n = len(loader)
+    return {
+        'elbo': total_elbo / n,
+        'loss': total_loss / n,
+    }
 
 # %%
 # ---------------------------------------------------------------------------
@@ -425,7 +425,8 @@ if __name__ == '__main__':
                 val_metrics = evaluate(model, guide, val_loader, device, n_samples=50)
                 print(
                     f"  Epoch {epoch:3d} | "
-                    f"ELBO Loss: {avg_loss:.4f} | "
+                    f"Loss: {avg_loss['loss']:.4f} | "
+                    f"ELBO: {avg_loss['elbo']:.2f}  "
                     f"Val ADE: {val_metrics['ADE']:.4f}  "
                     f"FDE: {val_metrics['FDE']:.4f}  "
                     f"NLL: {val_metrics['NLL']:.4f}  "
