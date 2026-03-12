@@ -14,3 +14,4 @@ mc_dropout/models/
 .DS_Store
 variational_bnn/models/
 train.log
+safety/plots
