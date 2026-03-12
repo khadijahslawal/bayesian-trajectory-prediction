@@ -6,7 +6,7 @@ This project explores how uncertainty quantification can improve the safety of p
 
 For example, if a pedestrian could plausibly move in multiple directions, the model should express this uncertainty rather than committing to a single prediction. This enables planning systems to make safer decisions when the future behavior of agents is ambiguous.
 
-##System Components and Key Deliverables 
+## System Components and Key Deliverables 
 The project evaluates several trajectory prediction approaches:
 
 1. Deterministic LSTM baseline
