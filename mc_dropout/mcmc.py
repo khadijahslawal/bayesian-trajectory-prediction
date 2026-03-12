@@ -152,7 +152,8 @@ if __name__ == '__main__':
     #Data
     loader = ScenesDataLoader(data_root='data/raw/')
     train_loader = loader.get_train_loader(
-    scenes=['eth', 'hotel', 'univ', 'zara1', 'zara2', 'zara3', 'students1', 'students3']
+    # scenes=['eth', 'hotel', 'univ', 'zara1', 'zara2', 'zara3', 'students1', 'students3']
+    scenes=['eth', 'hotel', 'univ', 'zara1', 'students1']
     )
     val_loader = loader.get_val_loader(scenes=['eth', 'hotel', 'univ', 'zara1', 'students1'])
     print(f"Training samples: {len(train_loader.dataset)}")
