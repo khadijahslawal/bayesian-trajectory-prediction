@@ -53,7 +53,7 @@ def extract_trajectories(data, obs_len=8, pred_len=12):
     return observations, predictions
 
 
-train_data = load_raw_data('data/raw/eth/train/biwi_hotel_train.txt')
+train_data = load_raw_data('data/raw/raw/train/biwi_hotel_train.txt')
 obs, pred = extract_trajectories(train_data)
 # print(f"Extracted {len(obs)} trajectories")
 # print(f"Observation shape: {obs.shape}")   # (N, 8, 2)
@@ -144,7 +144,7 @@ class ScenesDataLoader:
         self.consolidated_path = os.path.join(data_root, 'raw')
 
 
-    def get_train_loader(self, scenes=['eth', 'hotel', 'univ', 'zara1'], batch_size=32, shuffle=True):
+    def get_train_loader(self, scenes=['eth', 'hotel', 'univ', 'zara1', 'zara2', 'zara3', 'students1', 'students2'], batch_size=32, shuffle=True):
         """
         Get training data loader 
 
@@ -182,7 +182,7 @@ class ScenesDataLoader:
         dataset  = TrajectoryDataset(obs_norm, pred_norm)
         return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
     
-    def get_val_loader(self, scenes=['eth', 'hotel', 'univ', 'zara1'], batch_size=32):
+    def get_val_loader(self, scenes=['eth', 'hotel', 'univ', 'zara1', 'zara2', 'zara3', 'students1', 'students3'], batch_size=32):
         """
         Load validation data
         """
@@ -213,26 +213,38 @@ class ScenesDataLoader:
         dataset  = TrajectoryDataset(obs_norm, pred_norm)
         return DataLoader(dataset, batch_size=batch_size, shuffle=False)
     
-    def get_test_loader(self, scene = 'zara2', batch_size=32):
+    def get_test_loader(self, scenes=['eth', 'hotel', 'zara1', 'zara2', 'students1', 'students3'], batch_size=32):
         """
         Load test data
         """
-        file_base = self.SCENE_FILES[scene]
-        filepath = os.path.join(
-                self.consolidated_path,
-                'train',
-                f'{file_base}_val.txt'
-        )
 
-        data = load_raw_data(filepath)
-        obs, pred = extract_trajectories(data)
+        all_obs = []
+        all_pred = []
+
+        for scene in scenes:
+            file_base = self.SCENE_FILES[scene]
+            filepath = os.path.join(
+                self.consolidated_path,
+                'test',
+                f'{file_base}_test.txt'
+            )
+
+            data = load_raw_data(filepath)
+            obs, pred = extract_trajectories(data)
+            all_obs.append(obs)
+            all_pred.append(pred)
+
+        combined_obs = np.concatenate(all_obs, axis=0)
+        combined_pred = np.concatenate(all_pred, axis=0)
+
+        # Normalize
         obs_norm, pred_norm, _ = normalize_trajectories(
-            obs, pred
+            combined_obs, combined_pred
         )
 
         dataset  = TrajectoryDataset(obs_norm, pred_norm)
         return DataLoader(dataset, batch_size=batch_size, shuffle=False)
-
+    
 
 # dataset = TrajectoryDataset(obs_norm, pred_norm)
 # print(f"Dataset size: {len(dataset)}")

@@ -11,3 +11,6 @@ __pycache__
 btp-venv/
 .DS_Store
 mc_dropout/models/
+.DS_Store
+variational_bnn/models/
+train.log
