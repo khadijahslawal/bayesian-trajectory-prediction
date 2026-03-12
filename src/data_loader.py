@@ -53,8 +53,8 @@ def extract_trajectories(data, obs_len=8, pred_len=12):
     return observations, predictions
 
 
-train_data = load_raw_data('data/raw/raw/train/biwi_hotel_train.txt')
-obs, pred = extract_trajectories(train_data)
+# train_data = load_raw_data('data/raw/raw/train/biwi_hotel_train.txt')
+# obs, pred = extract_trajectories(train_data)
 # print(f"Extracted {len(obs)} trajectories")
 # print(f"Observation shape: {obs.shape}")   # (N, 8, 2)
 # print(f"Prediction shape: {pred.shape}")    # (N, 12, 2)
@@ -111,7 +111,7 @@ def normalize_trajectories(observations, predictions):
     
     return obs_normalized, pred_normalized, stats
 
-obs_norm, pred_norm, stats = normalize_trajectories(obs, pred)
+# obs_norm, pred_norm, stats = normalize_trajectories(obs, pred)
 # print(f"Normalized observation range: [{obs_norm.min():.2f}, {obs_norm.max():.2f}]")
 
 

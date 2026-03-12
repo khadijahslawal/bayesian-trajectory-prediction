@@ -17,7 +17,7 @@ if torch.cuda.is_available():
 os.makedirs('mc_dropout/models', exist_ok=True)
 os.makedirs('mc_dropout/results', exist_ok=True)   # mcmc.py
 
-class MCDroupoutLSTM(nn.Module):
+class MCDropoutLSTM(nn.Module):
     """
     LSTM trajectory predictor with MC Droupout
     """
@@ -85,7 +85,7 @@ class MCDroupoutLSTM(nn.Module):
 
 
 @torch.no_grad()
-def mc_predict(model: MCDroupoutLSTM, obs_seq=torch.Tensor, n_samples: int=50):
+def mc_predict(model: MCDropoutLSTM, obs_seq=torch.Tensor, n_samples: int=50):
     model.eval()
     model.enable_droupout()
 
@@ -152,13 +152,13 @@ if __name__ == '__main__':
     #Data
     loader = ScenesDataLoader(data_root='data/raw/')
     train_loader = loader.get_train_loader(
-    scenes=['eth', 'hotel', 'univ', 'zara1', 'students1']
+    scenes=['eth', 'hotel', 'univ', 'zara1', 'zara2', 'zara3', 'students1', 'students3']
     )
     val_loader = loader.get_val_loader(scenes=['eth', 'hotel', 'univ', 'zara1', 'students1'])
     print(f"Training samples: {len(train_loader.dataset)}")
     print(f"Val samples: {len(val_loader.dataset)}")
 
-    model = MCDroupoutLSTM(input_dim=2,
+    model = MCDropoutLSTM(input_dim=2,
                            hidden_dim=128, # up from 64
                            pred_len=12,
                            num_layers=2,
