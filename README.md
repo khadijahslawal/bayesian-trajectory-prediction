@@ -358,17 +358,167 @@ saved at **epoch 50** based on lowest validation FDE.
 
 ### Variational BNN (Pyro)
 
-Extends the LSTM architecture with a Bayesian output layer implemented via the [Pyro](http://pyro.ai) probabilistic programming library. Rather than point-estimate weights, the output layer learns a distribution over weights — specifically, a Normal distribution with learnable mean (`w_mu`) and variance (`softplus(w_rho)`) for each parameter.
 
-Training maximises the Evidence Lower Bound (ELBO), which balances fitting the data against staying close to the weight prior. At inference, 50 samples are drawn from the learned posterior, producing a distribution of predictions analogous to MC Dropout.
+### Variational Bayesian Neural Network (Pyro)
 
+#### The Core Idea — Learning Distributions Over Weights
+
+A standard neural network learns a **single fixed value** for each weight:
 ```
-Encoder/Decoder: Deterministic LSTM (same as baseline)
-Output layer:    Bayesian — weights ~ Normal(w_mu, softplus(w_rho))
-Prior:           Normal(0, 1)
-Training:        SVI with Trace_ELBO
-Inference:       50 posterior weight samples via guide trace
+Training → w = 0.42  (fixed forever)
+Inference → always uses w = 0.42 → one prediction
 ```
+
+A Variational BNN instead learns a **probability distribution** over each weight:
+```
+Training → w ~ N(μ=0.42, σ=0.15)  (a distribution, not a point)
+Inference → sample w₁=0.38, w₂=0.51, w₃=0.44 ... × 50 times
+         → 50 different networks → 50 different predictions
+         → mean = trajectory estimate, variance = uncertainty
+```
+
+This is more principled than MC Dropout — rather than approximating uncertainty
+through random neuron deactivation, the model **explicitly learns how uncertain it
+should be** about each weight parameter.
+
+#### Standard vs Bayesian Weights
+
+![Variational BNN Intuition](variational_bnn/figures/vbnn_intuition.png)
+
+The left panel shows a standard LSTM weight — a single fixed value, one possible
+network, no uncertainty. The middle panel shows a Variational BNN weight — a full
+probability distribution, where the spread of the posterior directly encodes how
+uncertain the model is about that parameter. The right panel shows the practical
+effect: sampling 50 weight sets produces 50 different trajectory fans, and the spread
+of those fans is the uncertainty estimate.
+
+#### Mathematical Formulation
+
+Variational inference frames learning as an optimisation problem. Instead of finding
+the exact posterior over weights $p(\mathbf{w} \mid \mathcal{D})$ (intractable), we
+find the closest tractable distribution $q_\phi(\mathbf{w})$ by maximising the
+**Evidence Lower Bound (ELBO)**:
+
+$$\mathcal{L}(\phi) = \underbrace{\mathbb{E}_{q_\phi(\mathbf{w})}[\log p(\mathcal{D} \mid \mathbf{w})]}_{\text{reconstruction — fit the data}} - \underbrace{D_{\text{KL}}[q_\phi(\mathbf{w}) \| p(\mathbf{w})]}_{\text{KL penalty — stay close to prior}}$$
+
+The KL term acts as a regulariser — it prevents the weight distributions from
+collapsing to point estimates or expanding to infinite variance. The variational
+posterior for each weight uses the **local reparameterisation trick**:
+
+$$q_\phi(w) = \mathcal{N}(\mu_w, \, \sigma_w^2), \quad \sigma_w = \text{softplus}(\rho_w)$$
+
+where $\mu_w$ and $\rho_w$ are the **learned parameters** — the model optimises these
+to best explain the training data while staying close to the prior $p(w) = \mathcal{N}(0, 1)$.
+
+At inference, weights are sampled directly from the learned posterior:
+
+$$\hat{\mathbf{w}}_t \sim q_\phi(\mathbf{w}), \quad t = 1, \ldots, 50$$
+
+producing 50 trajectory predictions whose variance is the epistemic uncertainty estimate.
+
+#### Architecture
+
+![Variational BNN Architecture](variational_bnn/figures/vbnn_architecture.png)
+
+A key design decision: only the **output layer** is Bayesian. The encoder and decoder
+LSTMs remain deterministic. This is the standard practical approach — making all LSTM
+cell weights Bayesian is technically valid but significantly increases training
+complexity with diminishing returns. The output layer weights have the most direct
+effect on prediction uncertainty and are sufficient to produce meaningful epistemic
+estimates.
+
+The top section shows the weight comparison (point vs distribution) and the ELBO
+objective. The middle shows the model flow — standard encoder/decoder feeding into
+the Bayesian output layer. The bottom shows inference: weight samples are drawn from
+the learned posterior $q(w \mid \mu_w, \sigma_w)$ and applied via `F.linear` (not
+`nn.Parameter` mutation, which would destabilise Pyro's trace).
+```python
+class BayesianTrajectoryPredictor:
+
+    def model(self, obs_seq, gt=None):
+        """Generative model — defines p(y | x, w) * p(w)."""
+        # Prior over output layer weights
+        w = pyro.sample("output_w",
+                        dist.Normal(torch.zeros(2, 128), torch.ones(2, 128)).to_event(2))
+        b = pyro.sample("output_b",
+                        dist.Normal(torch.zeros(2), torch.ones(2)).to_event(1))
+
+        # Run LSTM encoder/decoder, apply sampled weights functionally
+        h = self._encode_decode(obs_seq, w, b)
+
+        # Observation likelihood
+        with pyro.plate("data", obs_seq.size(0)):
+            pyro.sample("obs", dist.Normal(h, 0.1).to_event(2), obs=gt)
+
+    def guide(self, obs_seq, gt=None):
+        """Variational posterior — defines q(w) with learnable μ, σ."""
+        w_mu  = pyro.param("w_mu",  torch.zeros(2, 128))
+        w_rho = pyro.param("w_rho", -5 * torch.ones(2, 128))  # tight init
+        w_sigma = torch.nn.functional.softplus(w_rho)          # ensures σ > 0
+
+        pyro.sample("output_w", dist.Normal(w_mu, w_sigma).to_event(2))
+
+@torch.no_grad()
+def vbnn_predict(lstm, bayes_predictor, obs_seq, n_samples=50):
+    preds = []
+    for _ in range(n_samples):
+        # Sample weight set from learned posterior via guide trace
+        trace = pyro.poutine.trace(bayes_predictor.guide).get_trace(obs_seq)
+        w = trace.nodes["output_w"]["value"]
+        b = trace.nodes["output_b"]["value"]
+        # Apply sampled weights — F.linear avoids mutating nn.Parameter
+        pred = run_with_weights(lstm, obs_seq, w, b)
+        preds.append(pred)
+
+    samples = torch.stack(preds, dim=0)
+    return samples.mean(0), samples.var(0), samples
+```
+
+#### Training
+
+- **Library:** [Pyro](http://pyro.ai) probabilistic programming framework
+- **Inference:** Stochastic Variational Inference (SVI) with `Trace_ELBO`
+- **Optimiser:** Pyro Adam (lr=1e-3)
+- **Weight init:** `w_rho = -5` — tight initial distributions prevent KL explosion
+- **Epochs:** 100
+
+![Variational BNN Training](variational_bnn/figures/vbnn_training.png)
+
+The ELBO loss (leftmost panel) decreases from ~19,000 to ~17,000 — note this is not
+comparable to ADE or MSE loss, it is measured in nats and reflects the combined
+reconstruction + KL objective. ADE and FDE improve over the first 50 epochs then
+plateau. The uncertainty panel shows a consistent upward trend — as training
+progresses, the model learns to widen its weight posteriors, which is the expected
+behaviour as it explores the parameter space.
+
+#### Results
+
+| Metric | Value |
+|---|---|
+| Best ADE | 0.5813 (epoch 95) |
+| Best FDE | **1.0315** (epoch 75) |
+| Mean uncertainty | 0.003 |
+| Inference samples | 50 |
+| Training loss | ELBO (not comparable to ADE loss) |
+
+#### Comparison with MC Dropout
+
+| Property | MC Dropout | Variational BNN |
+|---|---|---|
+| Uncertainty source | Random neuron masks | Learned weight distributions |
+| Bayesian grounding | Approximate (Gal & Ghahramani) | Principled (variational inference) |
+| Implementation complexity | Low | High (requires Pyro) |
+| Training objective | ADE loss | ELBO |
+| Best FDE | **0.8892** | 1.0315 |
+| Uncertainty scale | 0.024 (informative) | 0.003 (compressed) |
+
+Despite being the more principled approach, Variational BNN underperforms MC Dropout
+on both ADE and FDE. The weight posterior collapse (very small σ) means the model is
+not effectively using its uncertainty capacity — a known challenge with variational
+inference in deep networks when the prior is too strong relative to the data signal.
+MC Dropout's simpler approximation produces more informative uncertainty estimates
+for this dataset and architecture, making it the recommended model for the safety
+framework.
 
 ---
 
