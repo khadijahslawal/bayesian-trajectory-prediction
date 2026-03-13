@@ -267,19 +267,19 @@ posterior over weights $q(\mathbf{w})$.
 The predictive distribution under MC Dropout is approximated as:
 
 $$
-p(\mathbf{y}^* \mid \mathbf{x}^*, \mathcal{D}) \approx \frac{1}{T} \sum_{t=1}^{T} p(\mathbf{y}^* \mid \mathbf{x}^*, \hat{\mathbf{w}}_t)
+p(\mathbf{y}^{*} \mid \mathbf{x}^{*}, \mathcal{D}) \approx \frac{1}{T} \sum_{t=1}^{T} p(\mathbf{y}^{*} \mid \mathbf{x}^{*}, \hat{\mathbf{w}}\_{t})
 $$
 
-where $T = 50$ stochastic forward passes and $\hat{\mathbf{w}}_t \sim q(\mathbf{w})$ is a weight sample under dropout mask $t$.
+where $T = 50$ stochastic forward passes and $\hat{\mathbf{w}}\_{t} \sim q(\mathbf{w})$ is a weight sample under dropout mask $t$.
 
 The **predictive mean** (trajectory estimate) and **predictive variance** (epistemic uncertainty) are:
 
 $$
-\mathbb{E}[\mathbf{y}^*] \approx \frac{1}{T}\sum_{t=1}^{T} f^{\{\hat{\mathbf{w}}_t\}}(\mathbf{x}^*)
+\mathbb{E}[\mathbf{y}^{*}] \approx \frac{1}{T} \sum_{t=1}^{T} f^{\hat{\mathbf{w}}\_{t}}(\mathbf{x}^{*})
 $$
 
 $$
-\text{Var}[\mathbf{y}^*] \approx \frac{1}{T}\sum_{t=1}^{T} \left(f^{\{\hat{\mathbf{w}}_t\}}(\mathbf{x}^*)\right)^2 - \left(\mathbb{E}[\mathbf{y}^*]\right)^2
+\text{Var}[\mathbf{y}^{*}] \approx \frac{1}{T} \sum_{t=1}^{T} (f^{\hat{\mathbf{w}}\_{t}}(\mathbf{x}^{*}))^{2} - (\mathbb{E}[\mathbf{y}^{*}])^{2}
 $$
 
 #### Architecture
