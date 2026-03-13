@@ -20,11 +20,14 @@ For an end-to-end system the key deliverables are as follows:
 - [Project Overview](#project-overview)
 - [Dataset](#dataset)
 - [Models](#models)
-- [Results](#results)
+  - [Baseline LSTM](#baseline-lstm)
+  - [MC Dropout](#mc-dropout-lstm)
+  - [Variational BNN](#variational-bnn)
+  - [Comparison and Results](#results-and-comparison)
 - [Safety Framework](#safety-framework)
+- [Conclusion](#conclusion)
 - [Installation](#installation)
 - [Usage](#usage)
-- [Key Findings](#key-findings)
 - [Repository Structure](#repository-structure)
 
 ---
@@ -180,10 +183,9 @@ class BaselineLSTM(nn.Module):
 
 ![Baseline Training Results](baseline/figures/baseline_training_results.png)
 
-Training loss decreases steadily across 100 epochs. ADE and FDE improve sharply in
-the first 20 epochs then plateau — characteristic of LSTM convergence on this dataset.
-The best FDE of **0.8956** is achieved at epoch 50, after which the model begins to
-slightly overfit to training trajectories.
+- Training loss decreases steadily across 100 epochs.
+- ADE and FDE improve sharply in the first 20 epochs then plateau — characteristic of LSTM convergence on this dataset.
+- The best FDE of **0.8956** is achieved at epoch 50, after which the model begins to slightly overfit to training trajectories.
 
 #### Results
 
@@ -202,8 +204,6 @@ the first case is far less certain. This is the fundamental limitation the Bayes
 models address.
 
 ### MC Dropout LSTM
-
-### Monte Carlo Dropout LSTM
 
 #### The Core Idea — How Confident Is the Model?
 
@@ -341,11 +341,10 @@ def mc_predict(model, obs_seq, n_samples=50):
 
 ![MC Dropout Training](mc_dropout/figures/mc_dropout_training.png)
 
-Loss decreases steadily across all 100 epochs. ADE and FDE oscillate after epoch 50,
-indicating the model has reached its capacity for this architecture size. The
-uncertainty track (rightmost panel) stabilises around 0.024, confirming the model has
-settled into a consistent epistemic confidence level. The best model checkpoint is
-saved at **epoch 50** based on lowest validation FDE.
+- Loss decreases steadily across all 100 epochs.
+- ADE and FDE oscillate after epoch 50, indicating the model has reached its capacity for this architecture size.
+- The uncertainty track (rightmost panel) stabilises around 0.024, confirming the model has settled into a consistent epistemic confidence level.
+- The best model checkpoint is saved at **epoch 50** based on lowest validation FDE.
 
 #### Results
 
@@ -357,7 +356,9 @@ saved at **epoch 50** based on lowest validation FDE.
 | Inference samples | 50 |
 | Inference time | ~50× baseline |
 
-### Variational Bayesian Neural Network (Pyro)
+### Variational BNN
+
+> Variational Bayesian Neural Network (Pyro)
 
 #### The Core Idea — Learning Distributions Over Weights
 
@@ -375,9 +376,7 @@ Inference → sample w₁=0.38, w₂=0.51, w₃=0.44 ... × 50 times
          → mean = trajectory estimate, variance = uncertainty
 ```
 
-This is more principled than MC Dropout — rather than approximating uncertainty
-through random neuron deactivation, the model **explicitly learns how uncertain it
-should be** about each weight parameter.
+This is more principled than MC Dropout, rather than approximating uncertainty through random neuron deactivation, the model **explicitly learns how uncertain it should be** about each weight parameter.
 
 #### Standard vs Bayesian Weights
 
@@ -495,12 +494,9 @@ def vbnn_predict(lstm, bayes_predictor, obs_seq, n_samples=50):
 
 ![Variational BNN Training](variational_bnn/figures/vbnn_training.png)
 
-The ELBO loss (leftmost panel) decreases from ~19,000 to ~17,000 — note this is not
-comparable to ADE or MSE loss, it is measured in nats and reflects the combined
-reconstruction + KL objective. ADE and FDE improve over the first 50 epochs then
-plateau. The uncertainty panel shows a consistent upward trend — as training
-progresses, the model learns to widen its weight posteriors, which is the expected
-behaviour as it explores the parameter space.
+- The ELBO loss (leftmost panel) decreased from ~19,000 to ~17,000 — note this is not comparable to ADE or MSE loss, it is measured in nats and reflects the combined reconstruction + KL objective. 
+- ADE and FDE improved over the first 50 epochs then plateaued.
+- The uncertainty panel shows a consistent upward trend; as training progresses, the model learns to widen its weight posteriors, which is the expected behaviour as it explores the parameter space.
 
 #### Results
 
@@ -533,7 +529,7 @@ framework.
 
 ---
 
-## Results
+## Results and Comparison
 
 All models trained for 100 epochs with Adam optimiser and ReduceLROnPlateau scheduler. Evaluated on ZARA2 test set.
 
@@ -693,7 +689,7 @@ enable uncertainty-aware safety decisions.** The Bayesian approach is not a trad
 
 ---
 
-## Conclusion & Key Findings
+## Conclusion
 
 **1. MC Dropout matches deterministic performance while adding uncertainty.**
 The Baseline LSTM achieves FDE 0.8956; MC Dropout achieves FDE 0.8892 — essentially identical — while producing meaningful epistemic uncertainty estimates at inference time. The Bayesian approach is not a trade-off; it is a free upgrade for safety-critical systems.
