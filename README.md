@@ -203,16 +203,147 @@ models address.
 
 ### MC Dropout LSTM
 
-Identical architecture to the baseline but with dropout layers that remain **active at inference time**. Each forward pass samples a different dropout mask, effectively sampling a different network from the approximate posterior over weights. Running 50 stochastic forward passes produces a distribution of trajectory predictions — the mean is the predicted trajectory, the variance is the epistemic uncertainty estimate.
+### Monte Carlo Dropout LSTM
 
+#### The Core Idea — How Confident Is the Model?
+
+A standard neural network always gives one answer:
 ```
-Encoder: LSTM (input=2, hidden=128, layers=2, dropout=0.3)
-Decoder: LSTMCell + Dropout(0.3) × 12 steps
-MC samples: 50 stochastic forward passes at inference
-Uncertainty: variance across 50 samples
+Input (pedestrian position) → Neural Network → "The pedestrian will be at (5.2, 3.1)"
 ```
 
-The key implementation detail is `enable_dropout()` — PyTorch's `.eval()` disables dropout by default, so dropout layers must be explicitly kept in `.train()` mode during inference to enable stochastic sampling.
+MC Dropout runs the network **50 times**, each time randomly switching off different
+neurons. Because each run uses a slightly different network, each run gives a slightly
+different answer:
+```
+Input → Network #1  (mask A) → Prediction: (5.1, 3.0)
+Input → Network #2  (mask B) → Prediction: (5.3, 3.2)
+Input → Network #3  (mask C) → Prediction: (5.0, 3.1)
+...                              ...
+Input → Network #50 (mask N) → Prediction: (5.2, 3.0)
+
+Mean:   (5.2, 3.1)  ← the predicted trajectory
+Spread: ±0.1–2.0m   ← the epistemic uncertainty
+```
+
+Think of it like **100 experts voting on where the pedestrian will go**. When the
+experts broadly agree, the pedestrian's path is predictable and the AV can proceed.
+When the experts disagree wildly, something complex is happening and the AV should
+slow down.
+
+#### Why Does Uncertainty Matter for Safety?
+
+![MC Dropout Intuition](mc_dropout/figures/mc_dropout_intuition.png)
+
+**Scenario 1 — Empty sidewalk:** The pedestrian has been walking straight for 3.2
+seconds with nothing in the way. All 50 forward passes predict nearly the same
+trajectory. Uncertainty is low (±0.1m). AV decision: **PROCEED**.
+
+**Scenario 2 — Crowded intersection:** The pedestrian is approaching an intersection
+with others going in different directions. The 50 forward passes spread out — some
+predict left, some straight, some right. Uncertainty is high (±2.0m). AV decision:
+**BRAKE**.
+
+This is the key insight: **the same model, the same architecture, produces uncertainty
+estimates that directly reflect how difficult the scene is to predict.**
+
+#### The Dropout Trick — Training vs Inference
+
+Standard dropout is only active during training to prevent overfitting, then switched
+off at inference. MC Dropout deliberately keeps it on at inference:
+```
+Training:  Dropout ON  → prevents overfitting
+Standard inference:  Dropout OFF  → one deterministic prediction
+MC Dropout inference:  Dropout ON  → different prediction each pass ← KEY CHANGE
+```
+
+This is grounded in Bayesian theory — Gal & Ghahramani (2016) showed that a neural
+network trained with dropout is equivalent to approximate variational inference in a
+deep Gaussian process. Each dropout mask corresponds to a sample from the approximate
+posterior over weights $q(\mathbf{w})$.
+
+#### Mathematical Formulation
+
+The predictive distribution under MC Dropout is approximated as:
+
+$$
+p(\mathbf{y}^* \mid \mathbf{x}^*, \mathcal{D}) \approx \frac{1}{T} \sum_{t=1}^{T} p(\mathbf{y}^* \mid \mathbf{x}^*, \hat{\mathbf{w}}_t)
+$$
+
+where $T = 50$ stochastic forward passes and $\hat{\mathbf{w}}_t \sim q(\mathbf{w})$ is a weight sample under dropout mask $t$.
+
+The **predictive mean** (trajectory estimate) and **predictive variance** (epistemic uncertainty) are:
+
+$$
+\mathbb{E}[\mathbf{y}^*] \approx \frac{1}{T}\sum_{t=1}^{T} f^{\{\hat{\mathbf{w}}_t\}}(\mathbf{x}^*)
+$$
+
+$$
+\text{Var}[\mathbf{y}^*] \approx \frac{1}{T}\sum_{t=1}^{T} \left(f^{\{\hat{\mathbf{w}}_t\}}(\mathbf{x}^*)\right)^2 - \left(\mathbb{E}[\mathbf{y}^*]\right)^2
+$$
+
+#### Architecture
+
+![MC Dropout Architecture](mc_dropout/figures/mc_dropout_architecture.png)
+
+The top half shows training — dropout is active, randomly deactivating 30% of neurons
+each batch. The bottom half shows inference — dropout stays on, and 50 stochastic
+forward passes are aggregated into a mean trajectory and variance estimate.
+```python
+class MCDropoutLSTM(nn.Module):
+    def __init__(self, input_dim=2, hidden_dim=128, pred_len=12,
+                 num_layers=2, dropout_p=0.3):
+        super().__init__()
+        self.encoder = nn.LSTM(input_dim, hidden_dim, num_layers,
+                               batch_first=True, dropout=dropout_p)
+        self.dropout = nn.Dropout(p=dropout_p)
+        self.decoder_cell = nn.LSTMCell(input_dim, hidden_dim)
+        self.output_layer = nn.Linear(hidden_dim, 2)
+
+    def enable_dropout(self):
+        """Keep dropout ON at inference — the key MC Dropout trick."""
+        for m in self.modules():
+            if isinstance(m, nn.Dropout):
+                m.train()  # overrides .eval() which would disable dropout
+
+@torch.no_grad()
+def mc_predict(model, obs_seq, n_samples=50):
+    model.eval()
+    model.enable_dropout()  # ← critical: dropout stays active
+
+    samples = torch.stack(
+        [model(obs_seq) for _ in range(n_samples)], dim=0
+    )  # (50, B, 12, 2)
+
+    mean     = samples.mean(dim=0)  # predicted trajectory
+    variance = samples.var(dim=0)   # epistemic uncertainty
+    return mean, variance, samples
+```
+
+#### Training
+
+- **Loss:** ADE loss — directly optimises the displacement metric being evaluated
+- **Optimiser:** Adam (lr=1e-3) with ReduceLROnPlateau (patience=5, factor=0.5)
+- **Dropout rate:** 0.3 — applied in encoder (inter-layer) and decoder (per step)
+- **Gradient clipping:** max norm 1.0
+
+![MC Dropout Training](mc_dropout/figures/mc_dropout_training.png)
+
+Loss decreases steadily across all 100 epochs. ADE and FDE oscillate after epoch 50,
+indicating the model has reached its capacity for this architecture size. The
+uncertainty track (rightmost panel) stabilises around 0.024, confirming the model has
+settled into a consistent epistemic confidence level. The best model checkpoint is
+saved at **epoch 50** based on lowest validation FDE.
+
+#### Results
+
+| Metric | Value |
+|---|---|
+| Best ADE | 0.4209 (epoch 95) |
+| Best FDE | **0.8892** (epoch 50) |
+| Mean uncertainty | 0.024 |
+| Inference samples | 50 |
+| Inference time | ~50× baseline |
 
 ### Variational BNN (Pyro)
 
@@ -244,7 +375,12 @@ All models trained for 100 epochs with Adam optimiser and ReduceLROnPlateau sche
 
 **FDE** (Final Displacement Error): L2 distance at the final prediction timestep only.
 
-MC Dropout matches the deterministic baseline on both metrics while adding meaningful uncertainty quantification — demonstrating that the Bayesian approach costs nothing in predictive performance. Variational BNN underperforms on raw metrics but still provides valid uncertainty estimates.
+#### Why MC Dropout Wins
+
+- MC Dropout matches the deterministic baseline on both metrics while adding meaningful uncertainty quantification — demonstrating that the Bayesian approach costs nothing in predictive performance. Variational BNN underperforms on raw metrics but still provides valid uncertainty estimates.
+- MC Dropout is simpler to implement, trains with standard backpropagation, and in practice frequently matches or outperforms more principled variational approaches. On this dataset, MC Dropout achieves FDE 0.8892 vs Variational BNN's 1.0315, while also producing higher and more informative uncertainty estimates (0.024 vs 0.003).
+
+- This is a well-documented finding in the literature — the simplicity of the dropout approximation does not come at the cost of predictive quality, making it the pragmatic choice for safety-critical deployment.
 
 ---
 
