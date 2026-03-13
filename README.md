@@ -1,13 +1,23 @@
 # Bayesian Trajectory Prediction for Autonomous Driving Safety
 
-A Bayesian machine learning project implementing uncertainty-quantified pedestrian trajectory prediction for autonomous vehicle safety decisions. The project compares three approaches — a deterministic Baseline LSTM, Monte Carlo Dropout, and Variational Bayesian Neural Networks — evaluated on the ETH/UCY pedestrian datasets.
+> Team: Guardians of the Graph
+
+> Team Members: Amulya Rayasam, Haiyang Hu, Ian Kidwell, Khadija Shuaib, Nikhil Sharma
+
+This project investigates how uncertainty quantification can make trajectory prediction safer in autonomous driving scenarios. Rather than predicing a single path, our Bayesian models would output a distribution over possible futures. This allows for a downstram safety system to reason about risks given certain levels of uncertainity.
+
+For an end-to-end system the key deliverables are as follows:
+
+- A deterministic baseline LSTM model
+- MC Dropout (primary bayesian method)
+- Variational BNN (secondary bayesian method)
+- Safety frameowrk
 
 ---
 
 ## Table of Contents
 
 - [Project Overview](#project-overview)
-- [Repository Structure](#repository-structure)
 - [Dataset](#dataset)
 - [Models](#models)
 - [Results](#results)
@@ -15,102 +25,105 @@ A Bayesian machine learning project implementing uncertainty-quantified pedestri
 - [Installation](#installation)
 - [Usage](#usage)
 - [Key Findings](#key-findings)
+- [Repository Structure](#repository-structure)
 
 ---
 
 ## Project Overview
 
-Autonomous vehicles must predict pedestrian trajectories to make safe navigation decisions. Deterministic models produce a single predicted path with no indication of how confident that prediction is — a model that is confidently wrong is more dangerous than one that flags its own uncertainty.
+Autonomous vehicles must predict pedestrian trajectories to make safe navigation decisions. Deterministic models (most neural networks) produce a single predicted path with no indication of how confident that prediction is. This creates multiple problems as there is no uncertainity estimates as such the model cannot tell when it is uncertain or confident. In the case of autonomous driving this can be potentially be dangerous as a model that is confidently wrong is more dangerous than one that flags its own uncertainty.
 
-This project implements **Bayesian uncertainty quantification** for trajectory prediction, enabling an autonomous vehicle to ask not just *where will this pedestrian go?* but *how certain are we about that prediction?* High uncertainty triggers conservative safety decisions (yield, slow down); low uncertainty allows the vehicle to proceed.
+This project implements **Bayesian uncertainty quantification** for trajectory prediction, enabling an autonomous vehicle to ask not just *where will this pedestrian go?* but *how certain are we about that prediction?* High uncertainty triggers conservative safety decisions (yield, slow down); while low uncertainty allows the vehicle to proceed.
 
 **Primary method:** Monte Carlo Dropout — approximate Bayesian inference via stochastic forward passes at inference time.
 
 **Secondary method:** Variational Bayesian Neural Networks via Pyro — principled Bayesian inference by learning distributions over network weights using ELBO optimisation.
 
-**Evaluation:** Standard ADE/FDE metrics on the ZARA2 held-out test scene, following the leave-one-out protocol established by Social Force and Social GAN.
-
----
-
-## Repository Structure
-
-```
-bayesian-trajectory-prediction/
-│
-├── data/
-│   └── raw/                        # ETH/UCY dataset files
-│       └── raw/
-│           ├── train/              # Training splits
-│           ├── val/                # Validation splits
-│           └── test/               # Test splits
-│
-├── src/
-│   ├── __init__.py
-│   └── data_loader.py              # ScenesDataLoader, trajectory extraction, normalisation
-│
-├── baseline/
-│   ├── __init__.py
-│   ├── baseline_lstm.py            # Deterministic LSTM baseline
-│   ├── models/
-│   │   └── baseline_best.pt        # Saved best model weights
-│   └── results/
-│       └── training_results.csv    # Training history
-│
-├── mc_dropout/
-│   ├── __init__.py
-│   ├── mcmc.py                     # MC Dropout LSTM + training + evaluation
-│   ├── models/
-│   │   └── mc_dropout_best.pt      # Saved best model weights
-│   └── results/
-│       └── training_results.csv    # Training history
-│
-├── variational_bnn/
-│   ├── __init__.py
-│   ├── bnn.py                      # Variational BNN via Pyro + training + evaluation
-│   ├── models/
-│   │   ├── vbnn_best.pt            # Saved best model weights
-│   │   └── vbnn_params.pt          # Saved Pyro parameter store
-│   └── results/
-│       └── training_results.csv    # Training history
-│
-├── safety/
-│   ├── safety_analysis.ipynb       # Full safety framework analysis notebook
-│   └── plots/                      # Generated visualisations
-│       ├── mc_dropout_uncertainty_fans.png
-│       ├── variational_bnn_uncertainty_fans.png
-│       ├── uncertainty_over_time.png
-│       ├── mc_dropout_calibration.png
-│       ├── variational_bnn_calibration.png
-│       ├── comparison_table.png
-│       └── crossing_scenario.png
-│
-└── README.md
-```
+**Evaluation:** Standard ADE/FDE metrics on the held-out test scene, following the leave-one-out protocol. 
 
 ---
 
 ## Dataset
 
-The project uses the **ETH/UCY pedestrian trajectory datasets**, sourced from the Trajectron++ repository. These are standard benchmarks in trajectory prediction research.
+The project uses the [ETH/UCY pedestrian trajectory datasets](https://github.com/StanfordASL/Trajectron-plus-plus), sourced from the Trajectron++ repository. These are standard benchmarks in trajectory prediction research, recorded via
+overhead cameras at fixed locations capturing bird's eye view coordinates (x, y in metres
+from the camera origin).
 
-| Scene | Split | Samples |
+### Scene Descriptions
+
+| Scene | Environment | Characteristics |
 |---|---|---|
-| ETH | train / val / test | ✓ |
-| Hotel | train / val / test | ✓ |
-| UNIV | train / val | ✓ |
-| ZARA1 | train / val / test | ✓ |
-| ZARA2 | train / val / test | ✓ (held-out test) |
-| ZARA3 | train / val | ✓ |
-| Students001 | train / val / test | ✓ |
-| Students003 | train / val / test | ✓ |
+| ETH | University campus | Crowded, complex multi-pedestrian interactions |
+| Hotel | Hotel entrance/exit | Sparser, more linear movements |
+| UNIV | University campus | Mix of individuals and small groups |
+| ZARA1 | Shopping area | Natural pedestrian behaviour, moderate density |
+| ZARA2 | Shopping area (different location) | Held out entirely for testing |
+| ZARA3 | Shopping area | Additional training data |
+| Students001 | University | Student foot traffic patterns |
+| Students003 | University | Additional student trajectories |
 
-**Training scenes:** ETH, Hotel, UNIV, ZARA1, Students001 (15,328 samples)
+All datasets capture **pedestrian-to-pedestrian interactions only** — no vehicles or cyclists.
+Each scene was recorded from a fixed overhead camera, giving consistent bird's eye view
+perspective across all scenes.
 
-**Test scene:** ZARA2 — held out entirely during training to assess generalisation
+### Data Format
 
-**Trajectory format:** Each sample consists of 8 observed timesteps and 12 prediction timesteps (0.4s per step → 3.2s observation, 4.8s prediction window).
+Raw files are tab-separated with four columns:
+```
+frame_id    pedestrian_id    x        y
+780         1.0              8.46     3.59
+790         1.0              9.57     3.79
+800         1.0              10.67    3.99
+800         2.0              13.64    5.80
+810         1.0              11.73    4.32
+810         2.0              12.09    5.75
+```
 
-**Normalisation:** Observations are expressed relative to the first observed position; predictions are expressed relative to the last observed position. This centres each trajectory around the origin and removes absolute coordinate dependence, making the learning problem consistent across scenes.
+Multiple pedestrians can share the same frame, at varying proximity based on their x, y
+coordinates. Frames are recorded at 2.5 Hz (one frame every 0.4 seconds).
+
+### Trajectory Extraction
+
+From the raw frame-by-frame data, overlapping sequences of 20 consecutive frames per
+pedestrian are extracted — 8 observed timesteps (3.2s) followed by 12 prediction
+timesteps (4.8s):
+```
+Observation (8 × 2):       Prediction (12 × 2):
+[[x₁, y₁],                 [[x₉,  y₉],
+ [x₂, y₂],                  [x₁₀, y₁₀],
+ ...                         ...
+ [x₈, y₈]]                  [x₂₀, y₂₀]]
+ ↑ Past (given to model)    ↑ Future (what the model predicts)
+```
+
+### Normalisation
+
+Raw coordinates are absolute positions in metres from the camera origin, which vary
+significantly across scenes. To make the learning problem consistent, trajectories are
+converted to relative displacements:
+
+- **Observations** → relative to the first observed position
+- **Predictions** → relative to the last observed position
+
+This centres each trajectory around the origin, removes scene-specific coordinate offsets,
+and gives the model a consistent input scale regardless of where in the scene the
+pedestrian is located.
+
+### Dataset Splits
+
+| Scene | Train | Val | Test | Training samples |
+|---|---|---|---|---|
+| ETH | ✓ | ✓ | ✓ | ✓ |
+| Hotel | ✓ | ✓ | ✓ | ✓ |
+| UNIV | ✓ | ✓ | — | ✓ |
+| ZARA1 | ✓ | ✓ | ✓ | ✓ |
+| ZARA2 | ✓ | ✓ | ✓ | **held out** |
+| ZARA3 | ✓ | ✓ | — | ✓ |
+| Students001 | ✓ | ✓ | ✓ | ✓ |
+| Students003 | ✓ | ✓ | ✓ | ✓ |
+
+**Training samples:** 15,328 &nbsp;|&nbsp; **Val samples:** 5,521 &nbsp;|&nbsp;
+**Test samples:** 34,161
 
 ---
 
@@ -288,6 +301,57 @@ The crossing scenario demonstrates that uncertainty-aware safety decisions are q
 
 ---
 
-## Team
+## Repository Structure
 
-Bayesian Machine Learning Course Project — March 2026
+```
+bayesian-trajectory-prediction/
+│
+├── data/
+│   └── raw/                        # ETH/UCY dataset files
+│       └── raw/
+│           ├── train/              # Training splits
+│           ├── val/                # Validation splits
+│           └── test/               # Test splits
+│
+├── src/
+│   ├── __init__.py
+│   └── data_loader.py              # ScenesDataLoader, trajectory extraction, normalisation
+│
+├── baseline/
+│   ├── __init__.py
+│   ├── baseline_lstm.py            # Deterministic LSTM baseline
+│   ├── models/
+│   │   └── baseline_best.pt        # Saved best model weights
+│   └── results/
+│       └── training_results.csv    # Training history
+│
+├── mc_dropout/
+│   ├── __init__.py
+│   ├── mcmc.py                     # MC Dropout LSTM + training + evaluation
+│   ├── models/
+│   │   └── mc_dropout_best.pt      # Saved best model weights
+│   └── results/
+│       └── training_results.csv    # Training history
+│
+├── variational_bnn/
+│   ├── __init__.py
+│   ├── bnn.py                      # Variational BNN via Pyro + training + evaluation
+│   ├── models/
+│   │   ├── vbnn_best.pt            # Saved best model weights
+│   │   └── vbnn_params.pt          # Saved Pyro parameter store
+│   └── results/
+│       └── training_results.csv    # Training history
+│
+├── safety/
+│   ├── safety_analysis.ipynb       # Full safety framework analysis notebook
+│   └── plots/                      # Generated visualisations
+│       ├── mc_dropout_uncertainty_fans.png
+│       ├── variational_bnn_uncertainty_fans.png
+│       ├── uncertainty_over_time.png
+│       ├── mc_dropout_calibration.png
+│       ├── variational_bnn_calibration.png
+│       ├── comparison_table.png
+│       └── crossing_scenario.png
+│
+└── README.md
+```
