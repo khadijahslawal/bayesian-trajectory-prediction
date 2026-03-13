@@ -131,14 +131,75 @@ pedestrian is located.
 
 ### Baseline LSTM
 
-A standard encoder-decoder LSTM with no dropout. Encodes 8 observed displacement steps into a hidden state, then auto-regressively decodes 12 predicted steps. Produces a single deterministic trajectory — no uncertainty estimate.
+A standard encoder-decoder LSTM with no dropout, producing a single deterministic
+trajectory prediction with no uncertainty estimate. This serves as the performance
+floor — any Bayesian model should match this on ADE/FDE while additionally
+providing uncertainty quantification.
 
+#### Architecture
+
+![Baseline LSTM Architecture](baseline/figures/baseline_architecture.png)
+
+The model follows a standard sequence-to-sequence design:
+
+- **Encoder:** A 2-layer LSTM reads the 8 observed relative displacement steps
+  `(Δx, Δy)` and compresses the trajectory history into a hidden state vector `(h, c)`
+- **Decoder:** An LSTMCell auto-regressively generates predictions one step at a time —
+  each predicted step is fed back as input for the next, propagating uncertainty
+  naturally across the horizon
+- **Output layer:** A linear projection from hidden dimension (128) to 2D displacement
+  at each step
+```python
+class BaselineLSTM(nn.Module):
+    def __init__(self, input_dim=2, hidden_dim=128, pred_len=12, num_layers=2):
+        super().__init__()
+        # Encoder: compress observation history into hidden state
+        self.encoder = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True)
+        # Decoder: auto-regressively predict future steps
+        self.decoder_cell = nn.LSTMCell(input_dim, hidden_dim)
+        self.output_layer = nn.Linear(hidden_dim, 2)
+
+    def forward(self, obs_seq):
+        _, (h_n, c_n) = self.encoder(obs_seq)
+        h, c = h_n[-1], c_n[-1]
+        dec_input = obs_seq[:, -1, :]   # start from last observed step
+        preds = []
+        for _ in range(self.pred_len):
+            h, c = self.decoder_cell(dec_input, (h, c))
+            out = self.output_layer(h)
+            preds.append(out)
+            dec_input = out             # feed prediction back as next input
+        return torch.stack(preds, dim=1)
 ```
-Encoder: LSTM (input=2, hidden=128, layers=2)
-Decoder: LSTMCell (input=2, hidden=128) × 12 steps
-Output:  Linear (128 → 2)
-Loss:    ADE (Average Displacement Error)
-```
+
+#### Training
+
+- **Loss:** Average Displacement Error (ADE) — directly optimises the metric being evaluated
+- **Optimiser:** Adam (lr=1e-3) with ReduceLROnPlateau scheduler (patience=5, factor=0.5)
+- **Gradient clipping:** max norm 1.0 to prevent exploding gradients in the LSTM
+
+![Baseline Training Results](baseline/figures/baseline_training_results.png)
+
+Training loss decreases steadily across 100 epochs. ADE and FDE improve sharply in
+the first 20 epochs then plateau — characteristic of LSTM convergence on this dataset.
+The best FDE of **0.8956** is achieved at epoch 50, after which the model begins to
+slightly overfit to training trajectories.
+
+#### Results
+
+| Metric | Value |
+|---|---|
+| Best ADE | 0.4207 (epoch 50) |
+| Best FDE | 0.8956 (epoch 50) |
+| Uncertainty | None - single point estimate |
+
+#### Limitation
+
+The baseline has no mechanism to express confidence. When predicting a pedestrian who
+is about to change direction, it produces the same format of output as when predicting
+a pedestrian walking in a straight line — a single trajectory with no indication that
+the first case is far less certain. This is the fundamental limitation the Bayesian
+models address.
 
 ### MC Dropout LSTM
 
