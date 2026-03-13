@@ -264,34 +264,35 @@ posterior over weights $q(\mathbf{w})$.
 
 #### Mathematical Formulation
 
-The predictive distribution under MC Dropout is approximated as:
-$$
-p(\mathbf{y}^{*} \mid \mathbf{x}^{*}, \mathcal{D})
-\approx
-\frac{1}{T}\sum_{t=1}^{T}
-p(\mathbf{y}^{*} \mid \mathbf{x}^{*}, \hat{\mathbf{w}}_{t})
-$$
-where $T = 50$ stochastic forward passes and $\hat{\mathbf{w}}_{t} \sim q(\mathbf{w})$
-is a weight sample under dropout mask $t$.
+MC Dropout approximates a Bayesian posterior by running the network T=50 times,
+each with a different random dropout mask. The final prediction is the average
+across all runs:
+```
+Run network 50 times with different dropout masks:
 
-The **predictive mean** (trajectory estimate) and **predictive variance** (epistemic
-uncertainty) are:
-$$
-\mathbb{E}[\mathbf{y}^{*}]
-\approx
-\frac{1}{T}\sum_{t=1}^{T}
-f^{\hat{\mathbf{w}}_{t}}(\mathbf{x}^{*})
-$$
+pass 1  (mask A) → prediction_1
+pass 2  (mask B) → prediction_2
+...
+pass 50 (mask N) → prediction_50
 
-$$
-\mathrm{Var}[\mathbf{y}^{*}]
-\approx
-\frac{1}{T}\sum_{t=1}^{T}
-\left(f^{\hat{\mathbf{w}}_{t}}(\mathbf{x}^{*})\right)^{2}
--
-\left(\mathbb{E}[\mathbf{y}^{*}]\right)^{2}
-$$
-#### Architecture
+predicted trajectory  = mean(prediction_1 ... prediction_50)
+epistemic uncertainty = variance(prediction_1 ... prediction_50)
+```
+
+Concretely, for each prediction step:
+```
+mean     = (pred_1 + pred_2 + ... + pred_50) / 50
+variance = average of squared differences from the mean
+```
+
+A **low variance** means all 50 passes agreed → the model is confident.
+A **high variance** means the 50 passes spread out → the model is uncertain.
+
+This is mathematically grounded in the work of Gal & Ghahramani (2016), who showed
+that a dropout-trained network is equivalent to approximate variational inference —
+each dropout mask corresponds to sampling a different set of weights from an
+approximate posterior distribution over the network parameters.
+
 
 #### Architecture
 
@@ -356,9 +357,6 @@ saved at **epoch 50** based on lowest validation FDE.
 | Inference samples | 50 |
 | Inference time | ~50× baseline |
 
-### Variational BNN (Pyro)
-
-
 ### Variational Bayesian Neural Network (Pyro)
 
 #### The Core Idea — Learning Distributions Over Weights
@@ -395,26 +393,39 @@ of those fans is the uncertainty estimate.
 #### Mathematical Formulation
 
 Variational inference frames learning as an optimisation problem. Instead of finding
-the exact posterior over weights $p(\mathbf{w} \mid \mathcal{D})$ (intractable), we
-find the closest tractable distribution $q_\phi(\mathbf{w})$ by maximising the
-**Evidence Lower Bound (ELBO)**:
+the exact posterior over weights (intractable), we find the closest tractable
+distribution by maximising the **Evidence Lower Bound (ELBO)**:
+```
+ELBO = E[log p(data | weights)] - KL[q(weights) || p(weights)]
+         ↑                              ↑
+    reconstruction term           KL penalty term
+    (fit the training data)       (stay close to the prior)
+```
 
-$$\mathcal{L}(\phi) = \underbrace{\mathbb{E}_{q_\phi(\mathbf{w})}[\log p(\mathcal{D} \mid \mathbf{w})]}_{\text{reconstruction — fit the data}} - \underbrace{D_{\text{KL}}[q_\phi(\mathbf{w}) \| p(\mathbf{w})]}_{\text{KL penalty — stay close to prior}}$$
+The two terms balance each other:
+- **Reconstruction** pushes the weight distributions to explain the training data well
+- **KL penalty** prevents the distributions from straying too far from the prior
+  `p(w) = N(0, 1)` — acting as a regulariser that stops overfitting
 
-The KL term acts as a regulariser — it prevents the weight distributions from
-collapsing to point estimates or expanding to infinite variance. The variational
-posterior for each weight uses the **local reparameterisation trick**:
+Each weight learns two parameters instead of one:
+```
+Standard LSTM:      w = 0.42                      (one fixed value)
+Variational BNN:    μ = 0.42,  σ = softplus(ρ)   (mean and spread)
+```
 
-$$q_\phi(w) = \mathcal{N}(\mu_w, \, \sigma_w^2), \quad \sigma_w = \text{softplus}(\rho_w)$$
+The `softplus` function ensures σ is always positive. During training, Pyro optimises
+μ and ρ for every weight in the output layer via gradient descent on the ELBO.
 
-where $\mu_w$ and $\rho_w$ are the **learned parameters** — the model optimises these
-to best explain the training data while staying close to the prior $p(w) = \mathcal{N}(0, 1)$.
+At inference, weights are sampled from the learned distribution 50 times:
+```
+w_1 ~ N(μ, σ)  →  trajectory prediction 1
+w_2 ~ N(μ, σ)  →  trajectory prediction 2
+...
+w_50 ~ N(μ, σ) →  trajectory prediction 50
 
-At inference, weights are sampled directly from the learned posterior:
-
-$$\hat{\mathbf{w}}_t \sim q_\phi(\mathbf{w}), \quad t = 1, \ldots, 50$$
-
-producing 50 trajectory predictions whose variance is the epistemic uncertainty estimate.
+mean(predictions)     = predicted trajectory
+variance(predictions) = epistemic uncertainty
+```
 
 #### Architecture
 
@@ -680,6 +691,24 @@ accuracy (FDE 0.8892 vs 0.8956) while adding meaningful uncertainty estimates th
 enable uncertainty-aware safety decisions.** The Bayesian approach is not a trade-off
 — it is a free upgrade for safety-critical systems. Sonnet 4.6Extended
 
+---
+
+## Conclusion & Key Findings
+
+**1. MC Dropout matches deterministic performance while adding uncertainty.**
+The Baseline LSTM achieves FDE 0.8956; MC Dropout achieves FDE 0.8892 — essentially identical — while producing meaningful epistemic uncertainty estimates at inference time. The Bayesian approach is not a trade-off; it is a free upgrade for safety-critical systems.
+
+**2. Uncertainty grows with prediction horizon.**
+Both Bayesian models show monotonically increasing uncertainty across the 12-step prediction window, confirming the models have learned that longer-horizon predictions are inherently less reliable. This is the correct behaviour for an autonomous driving safety system.
+
+**3. MC Dropout is better calibrated than Variational BNN.**
+MC Dropout's uncertainty estimates correlate more reliably with actual prediction error. Variational BNN's weight posteriors are too concentrated, producing uncertainty values too small to differentiate high- and low-confidence predictions effectively.
+
+**4. MC Dropout is the recommended model for safety decisions.**
+Higher uncertainty estimates, better calibration, and competitive ADE/FDE make MC Dropout the appropriate choice for downstream safety classification. This is consistent with the broader literature where MC Dropout frequently matches or outperforms more principled variational approaches in practice.
+
+**5. Uncertainty quantification enables adaptive AV behaviour.**
+The crossing scenario demonstrates that uncertainty-aware safety decisions are qualitatively different from deterministic predictions — the same model can appropriately choose to proceed or yield based on prediction confidence, a capability impossible with a point-estimate baseline.
 
 ---
 
@@ -741,25 +770,6 @@ mean, variance, samples = mc_predict(model, obs, n_samples=50)
 # variance: (B, 12, 2) — epistemic uncertainty per step
 # samples:  (50, B, 12, 2) — individual stochastic predictions
 ```
-
----
-
-## Key Findings
-
-**1. MC Dropout matches deterministic performance while adding uncertainty.**
-The Baseline LSTM achieves FDE 0.8956; MC Dropout achieves FDE 0.8892 — essentially identical — while producing meaningful epistemic uncertainty estimates at inference time. The Bayesian approach is not a trade-off; it is a free upgrade for safety-critical systems.
-
-**2. Uncertainty grows with prediction horizon.**
-Both Bayesian models show monotonically increasing uncertainty across the 12-step prediction window, confirming the models have learned that longer-horizon predictions are inherently less reliable. This is the correct behaviour for an autonomous driving safety system.
-
-**3. MC Dropout is better calibrated than Variational BNN.**
-MC Dropout's uncertainty estimates correlate more reliably with actual prediction error. Variational BNN's weight posteriors are too concentrated, producing uncertainty values too small to differentiate high- and low-confidence predictions effectively.
-
-**4. MC Dropout is the recommended model for safety decisions.**
-Higher uncertainty estimates, better calibration, and competitive ADE/FDE make MC Dropout the appropriate choice for downstream safety classification. This is consistent with the broader literature where MC Dropout frequently matches or outperforms more principled variational approaches in practice.
-
-**5. Uncertainty quantification enables adaptive AV behaviour.**
-The crossing scenario demonstrates that uncertainty-aware safety decisions are qualitatively different from deterministic predictions — the same model can appropriately choose to proceed or yield based on prediction confidence, a capability impossible with a point-estimate baseline.
 
 ---
 
