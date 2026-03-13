@@ -547,7 +547,14 @@ All models trained for 100 epochs with Adam optimiser and ReduceLROnPlateau sche
 
 ## Safety Framework
 
-The safety framework (`safety/safety_analysis.ipynb`) loads the trained models, runs predictions on the ZARA2 test set, and produces uncertainty-aware safety decisions.
+**Notebook:** `safety/safety_analysis.ipynb` — run all cells top to bottom to reproduce all results and plots.
+
+The safety framework is the practical payoff of the whole project. Both Bayesian models
+are loaded, run on the ZARA2 test set, and their uncertainty estimates are translated into
+real safety decisions an autonomous vehicle could act on.
+
+The key question it answers: **given a pedestrian trajectory prediction, should the
+vehicle proceed, slow down, or stop?**
 
 ### Safety Score
 
@@ -565,17 +572,114 @@ Scores are classified into three tiers:
 | CAUTION | 0.020 – 0.040 | Reduce speed |
 | UNSAFE | uncertainty > 0.040 | Yield / stop |
 
-### Visualisations
+### Visuals 1: Trajectory Predictions with Uncertainty Fans
 
-**Uncertainty Fans** — Each predicted trajectory is shown as a fan of 50 individual MC samples around the mean prediction. Wider fans indicate higher uncertainty. MC Dropout produces visibly wider fans than Variational BNN, reflecting its higher and more informative uncertainty scale.
+![MC Dropout Uncertainty Fans](safety/plots/mc_dropout_uncertainty_fans.png)
+![Variational BNN Uncertainty Fans](safety/plots/variational_bnn_uncertainty_fans.png)
 
-**Uncertainty Over Time** — Both models show monotonically increasing uncertainty across the 12 prediction steps, which is the theoretically correct behaviour: the further into the future, the less certain the model should be. MC Dropout grows from ~0.003 at step 1 to ~0.070 at step 12 (20× increase over 4.8 seconds). This property directly supports safety-critical decision making — near-term predictions should be trusted more than far-term ones.
+Each panel shows one pedestrian from the test set. The **blue line** is what the model
+observed (3.2 seconds of walking). The **green dashed line** is where they actually
+went. The **coloured fan** is all 50 predictions from the model — each slightly
+different because of the stochastic forward passes.
 
-**Calibration Plots** — A well-calibrated model's predicted uncertainty should correlate with actual prediction error. MC Dropout shows a positive trend between uncertainty and ADE error, indicating partial calibration. Variational BNN's uncertainty range is too compressed to be informative, with most predictions clustered near-zero uncertainty regardless of error.
+A **tight fan** means all 50 predictions agree → the model is confident.
+A **wide fan** means the predictions spread out → the model is uncertain.
 
-**ETH Crossing Scenario** — Demonstrates the practical safety decision pipeline. A pedestrian with low uncertainty (0.00012) triggers **PROCEED**; a pedestrian with high uncertainty (0.12925) triggers **YIELD / SLOW DOWN**. This is the core application: uncertainty quantification enables the autonomous vehicle to adapt its behaviour to prediction confidence rather than always acting on a single point estimate.
+The colour of the fan and title shows the safety classification: green = SAFE,
+orange = CAUTION, red = UNSAFE.
 
-**Comparison Table** — MC Dropout and Variational BNN produce similar safety classification counts (22-23 SAFE, 2 CAUTION, 7-8 UNSAFE per batch) despite different uncertainty scales. MC Dropout's mean safety score of 0.65 vs Variational BNN's 0.49 reflects MC Dropout's more conservative uncertainty estimates — appropriate for safety-critical applications.
+Comparing the two plots: MC Dropout's fans are noticeably wider than Variational
+BNN's. This is not a flaw — it means MC Dropout is more appropriately cautious about
+its predictions, which is exactly the behaviour you want for a safety system. A model
+that is overconfident is more dangerous than one that admits uncertainty.
+
+---
+
+### Visuals 2: Uncertainty Over the Prediction Horizon
+
+![Uncertainty Over Time](safety/plots/uncertainty_over_time.png)
+
+This plot answers a simple question: **does the model become less certain the further
+into the future it predicts?**
+
+The answer is yes — and this is the correct behaviour. Both models show uncertainty
+growing steadily from step 1 (0.4 seconds ahead) to step 12 (4.8 seconds ahead). 
+Predicting where someone will be in half a second is much easier than predicting where
+they will be in five seconds.
+
+MC Dropout (blue) grows from near zero to ~0.07 — a 20× increase over the prediction
+window. Variational BNN (red) shows the same upward shape but at a lower scale (~0.01).
+The right panel normalises both to [0, 1] to confirm they have the same growth pattern
+— it is just the absolute scale that differs.
+
+For an autonomous vehicle, this means **near-term predictions should be trusted more
+than far-term ones**, and the safety system should weight uncertainty accordingly.
+
+---
+
+### Visual 3: Calibration
+
+![MC Dropout Calibration](safety/plots/mc_dropout_calibration.png)
+![Variational BNN Calibration](safety/plots/variational_bnn_calibration.png)
+
+Calibration answers: **when the model says it is uncertain, is it actually making
+bigger errors?**
+
+A perfectly calibrated model would sit exactly on the dashed diagonal — higher
+predicted uncertainty always means higher actual error. The left scatter plot shows
+each pedestrian as a dot; the red line is the average trend across bins.
+
+MC Dropout shows a positive trend — when uncertainty goes up, errors tend to go up
+too. It is not perfect, but the relationship is there. This means MC Dropout's
+uncertainty estimates are genuinely informative, not just noise.
+
+Variational BNN's scatter is more compressed — most predictions cluster at very low
+uncertainty values regardless of how wrong they are. This confirms that its uncertainty
+estimates are too conservative to be fully useful for safety decisions, even though the
+model's raw trajectory predictions are reasonable.
+
+---
+
+### Visuals 4: ETH Crossing Scenario
+
+![Crossing Scenario](safety/plots/crossing_scenario.png)
+
+This is the clearest demonstration of why uncertainty quantification matters for
+autonomous driving.
+
+**Left panel — Low Uncertainty (SAFE):** The pedestrian has been walking in a short,
+predictable path. The model's uncertainty is just 0.00012 — essentially zero. The fan
+is tight, the model is confident, and the AV decision is **PROCEED**.
+
+**Right panel — High Uncertainty (UNSAFE):** A different pedestrian shows much more
+spread in their trajectory. The uncertainty is 0.12925 — orders of magnitude higher.
+The fan spreads widely along the prediction horizon, and the AV correctly decides to
+**YIELD / SLOW DOWN**.
+
+This is exactly what a deterministic baseline cannot do. Both pedestrians would get
+the same format of output from a standard LSTM — a single predicted path with no
+confidence signal. The Bayesian model gives the vehicle the information it needs to
+make a different, safer decision in the second case.
+
+---
+
+### Full Model Comparison
+
+![Comparison Table](safety/plots/comparison_table.png)
+
+The comparison table (left) summarises all three models side by side. The bar chart
+(centre) shows how many pedestrians each Bayesian model classified as SAFE, CAUTION,
+or UNSAFE — both models agree closely on classifications despite using different
+approaches to uncertainty. The score distribution (right) shows MC Dropout has a
+higher mean safety score (0.65 vs 0.49), meaning it is more generous about classifying
+pedestrians as safe — but crucially, when it does flag UNSAFE, its uncertainty values
+are larger and more informative.
+
+The headline finding: **MC Dropout matches the deterministic baseline on prediction
+accuracy (FDE 0.8892 vs 0.8956) while adding meaningful uncertainty estimates that
+enable uncertainty-aware safety decisions.** The Bayesian approach is not a trade-off
+— it is a free upgrade for safety-critical systems. Sonnet 4.6Extended
+
 
 ---
 
