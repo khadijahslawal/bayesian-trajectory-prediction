@@ -265,20 +265,17 @@ posterior over weights $q(\mathbf{w})$.
 #### Mathematical Formulation
 
 The predictive distribution under MC Dropout is approximated as:
-
 $$
 p(\mathbf{y}^{*} \mid \mathbf{x}^{*}, \mathcal{D})
 \approx
 \frac{1}{T}\sum_{t=1}^{T}
 p(\mathbf{y}^{*} \mid \mathbf{x}^{*}, \hat{\mathbf{w}}_{t})
 $$
-
 where $T = 50$ stochastic forward passes and $\hat{\mathbf{w}}_{t} \sim q(\mathbf{w})$
 is a weight sample under dropout mask $t$.
 
 The **predictive mean** (trajectory estimate) and **predictive variance** (epistemic
 uncertainty) are:
-
 $$
 \mathbb{E}[\mathbf{y}^{*}]
 \approx
@@ -294,7 +291,6 @@ $$
 -
 \left(\mathbb{E}[\mathbf{y}^{*}]\right)^{2}
 $$
-
 #### Architecture
 
 #### Architecture
